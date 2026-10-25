@@ -543,12 +543,23 @@ impl RendezvousServer {
                     if let Some(sink) = sink.take() {
                         self.tcp_punch.lock().await.insert(try_into_v4(addr), sink);
                     }
+                    if let Some(refusal) = crate::plan_check::refuse_reach(&rf.id).await {
+                        let mut response = RelayResponse::new();
+                        response.set_id(rf.id);
+                        response.refuse_reason = refusal;
+                        let mut msg_out = RendezvousMessage::new();
+                        msg_out.set_relay_response(response);
+                        allow_err!(self.send_to_tcp_sync(msg_out, addr).await);
+                        return true;
+                    }
                     if let Some(peer) = self.pm.get_in_memory(&rf.id).await {
                         let mut msg_out = RendezvousMessage::new();
+                        let target = rf.id.clone();
                         rf.socket_addr = AddrMangle::encode(addr).into();
                         msg_out.set_request_relay(rf);
                         let peer_addr = peer.read().await.socket_addr;
                         self.tx.send(Data::Msg(msg_out.into(), peer_addr)).ok();
+                        crate::plan_check::note_connected(&target);
                     }
                     return true;
                 }
@@ -736,6 +747,14 @@ impl RendezvousServer {
             });
             return Ok((msg_out, None));
         }
+        if let Some(refusal) = crate::plan_check::refuse_reach(&ph.id).await {
+            let mut msg_out = RendezvousMessage::new();
+            msg_out.set_punch_hole_response(PunchHoleResponse {
+                other_failure: refusal,
+                ..Default::default()
+            });
+            return Ok((msg_out, None));
+        }
         let id = ph.id;
         // punch hole request from A, relay to B,
         // check if in same intranet first,
@@ -810,6 +829,7 @@ impl RendezvousServer {
                     ..Default::default()
                 });
             }
+            crate::plan_check::note_connected(&id);
             Ok((msg_out, Some(peer_addr)))
         } else {
             let mut msg_out = RendezvousMessage::new();
