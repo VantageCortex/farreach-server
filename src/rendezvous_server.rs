@@ -473,8 +473,13 @@ impl RendezvousServer {
                     socket.send(&msg_out, addr).await?
                 }
                 Some(rendezvous_message::Union::PunchHoleRequest(ph)) => {
-                    // UDP PunchHoleRequest is intentionally unsupported.
-                    // The supported client path sends PunchHoleRequest over TCP/WS.
+                    // With the plan check off, UDP punch holes stay unsupported.
+                    // With it on, answer from memory so this loop does not wait on the network.
+                    if crate::plan_check::plan_check_enabled(
+                        std::env::var("FARREACH_PLAN_CHECK").ok().as_deref(),
+                    ) {
+                        allow_err!(self.handle_udp_punch_hole_request(addr, ph, key).await);
+                    }
                 }
                 Some(rendezvous_message::Union::PunchHoleSent(phs)) => {
                     // UDP PunchHoleSent is intentionally unsupported to avoid UDP reflection/amplification
@@ -736,6 +741,7 @@ impl RendezvousServer {
         ph: PunchHoleRequest,
         key: &str,
         ws: bool,
+        udp: bool,
     ) -> ResultType<(RendezvousMessage, Option<SocketAddr>)> {
         let mut ph = ph;
         if !key.is_empty() && ph.licence_key != key {
@@ -747,7 +753,13 @@ impl RendezvousServer {
             });
             return Ok((msg_out, None));
         }
-        if let Some(refusal) = crate::plan_check::refuse_reach(&ph.id).await {
+        // UDP is handled on the shared socket loop, so it must not wait on the network.
+        let refusal = if udp {
+            crate::plan_check::refuse_udp(&ph.id)
+        } else {
+            crate::plan_check::refuse_reach(&ph.id).await
+        };
+        if let Some(refusal) = refusal {
             let mut msg_out = RendezvousMessage::new();
             msg_out.set_punch_hole_response(PunchHoleResponse {
                 other_failure: refusal,
@@ -913,7 +925,7 @@ impl RendezvousServer {
         key: &str,
         ws: bool,
     ) -> ResultType<()> {
-        let (msg, to_addr) = self.handle_punch_hole_request(addr, ph, key, ws).await?;
+        let (msg, to_addr) = self.handle_punch_hole_request(addr, ph, key, ws, false).await?;
         if let Some(addr) = to_addr {
             self.tx.send(Data::Msg(msg.into(), addr))?;
         } else {
@@ -929,7 +941,7 @@ impl RendezvousServer {
         ph: PunchHoleRequest,
         key: &str,
     ) -> ResultType<()> {
-        let (msg, to_addr) = self.handle_punch_hole_request(addr, ph, key, false).await?;
+        let (msg, to_addr) = self.handle_punch_hole_request(addr, ph, key, false, true).await?;
         self.tx.send(Data::Msg(
             msg.into(),
             match to_addr {
