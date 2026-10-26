@@ -2,10 +2,7 @@ use hbb_common::{log, tokio};
 use serde_derive::Deserialize;
 use std::{
     collections::HashMap,
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Mutex, OnceLock,
-    },
+    sync::{Mutex, OnceLock},
     time::{Duration, Instant, SystemTime},
 };
 
@@ -15,7 +12,6 @@ const OUTAGE_MESSAGE: &str =
 const DAY_SECS: u64 = 24 * 60 * 60;
 const CONNECTED_SECS: u64 = 60;
 const MAP_LIMIT: usize = 10_000;
-const BACKGROUND_LIMIT: usize = 8;
 
 #[derive(Clone)]
 struct Cached {
@@ -28,7 +24,6 @@ static CACHE: Mutex<Option<HashMap<String, Cached>>> = Mutex::new(None);
 static ALLOWED: Mutex<Option<HashMap<String, SystemTime>>> = Mutex::new(None);
 static CONNECTED: Mutex<Option<HashMap<String, Instant>>> = Mutex::new(None);
 static HTTP: OnceLock<reqwest::Client> = OnceLock::new();
-static BACKGROUND: AtomicUsize = AtomicUsize::new(0);
 
 pub fn plan_check_enabled(value: Option<&str>) -> bool {
     value
@@ -105,6 +100,8 @@ fn store_answer(id: &str, allow: bool, message: String, until: Instant) {
 fn remember(id: &str, allow: bool, message: String, seconds: u64, at: Instant) {
     if allow {
         note_allowed(id, SystemTime::now());
+    } else {
+        forget_allowed(id);
     }
     if seconds == 0 {
         return;
@@ -120,6 +117,12 @@ fn note_allowed(id: &str, at: SystemTime) {
         return;
     };
     store_allowed(id, until);
+}
+
+fn forget_allowed(id: &str) {
+    if let Some(map) = allowed().as_mut() {
+        map.remove(id);
+    }
 }
 
 fn store_allowed(id: &str, until: SystemTime) {
@@ -185,20 +188,6 @@ pub async fn refuse_reach(id: &str) -> Option<String> {
     }
 }
 
-pub fn refuse_udp(id: &str) -> Option<String> {
-    if !enabled() {
-        return None;
-    }
-    let (refusal, background) = decide(id, Instant::now());
-    if background {
-        start_background_reach(id);
-    }
-    if refusal.is_some() {
-        log_deny();
-    }
-    refusal
-}
-
 pub fn note_connected(id: &str) {
     if !enabled() {
         return;
@@ -241,18 +230,11 @@ fn memory(id: &str, now: Instant) -> Memory {
     }
 }
 
-fn decide(id: &str, now: Instant) -> (Option<String>, bool) {
-    match memory(id, now) {
-        Memory::Allow => (None, false),
-        Memory::Deny(message) => (Some(message), false),
-        Memory::Unknown => (Some(OUTAGE_MESSAGE.to_owned()), true),
-    }
-}
-
 fn outage_answer(id: &str, now: Instant) -> Ask {
-    match decide(id, now).0 {
-        None => Ask::Allow,
-        Some(message) => Ask::Deny(message),
+    match memory(id, now) {
+        Memory::Allow => Ask::Allow,
+        Memory::Deny(message) => Ask::Deny(message),
+        Memory::Unknown => Ask::Deny(OUTAGE_MESSAGE.to_owned()),
     }
 }
 
@@ -275,43 +257,6 @@ async fn ask(id: &str, action: &str) -> Ask {
         }
         Err(()) => outage_answer(id, Instant::now()),
     }
-}
-
-struct BackgroundPermit;
-
-impl Drop for BackgroundPermit {
-    fn drop(&mut self) {
-        BACKGROUND.fetch_sub(1, Ordering::Relaxed);
-    }
-}
-
-fn reserve_background() -> Option<BackgroundPermit> {
-    loop {
-        let current = BACKGROUND.load(Ordering::Relaxed);
-        if current >= BACKGROUND_LIMIT {
-            return None;
-        }
-        if BACKGROUND
-            .compare_exchange(current, current + 1, Ordering::Relaxed, Ordering::Relaxed)
-            .is_ok()
-        {
-            return Some(BackgroundPermit);
-        }
-    }
-}
-
-fn start_background_reach(id: &str) {
-    if tokio::runtime::Handle::try_current().is_err() {
-        return;
-    }
-    let Some(permit) = reserve_background() else {
-        return;
-    };
-    let id = id.to_owned();
-    tokio::spawn(async move {
-        let _permit = permit;
-        let _ = ask(&id, "reach").await;
-    });
 }
 
 fn http_client() -> Result<&'static reqwest::Client, ()> {
@@ -435,10 +380,12 @@ mod tests {
     }
 
     #[test]
-    fn udp_decision_never_waits_and_refuses_an_unknown_id() {
-        let (refusal, background) = decide("udp-unknown-id", Instant::now());
-        assert_eq!(refusal.as_deref(), Some(OUTAGE_MESSAGE));
-        assert!(background);
+    fn a_no_clears_the_24_hour_memory() {
+        let id = "yes-then-no";
+        remember(id, true, String::new(), 300, Instant::now());
+        assert!(allowed_recently(id, SystemTime::now()));
+        remember(id, false, String::new(), 0, Instant::now());
+        assert!(!allowed_recently(id, SystemTime::now()));
     }
 
     #[test]
