@@ -1,0 +1,47 @@
+name: FarReach Linux build
+
+on:
+  push:
+    branches: [farreach-build]
+
+permissions:
+  contents: write
+
+jobs:
+  hbbs:
+    runs-on: ubuntu-22.04
+    env:
+      SOURCE_SHA: 6cde1c024bf77c52a2e7bcf8e4c7df54734698a4
+      TAG: v1.1.17-farreach.1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          submodules: recursive
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cross
+
+      - name: Build
+        run: cross build --release --locked --target x86_64-unknown-linux-musl --bin hbbs
+
+      - name: Check
+        run: |
+          cp target/x86_64-unknown-linux-musl/release/hbbs hbbs-linux-amd64
+          file hbbs-linux-amd64
+          ./hbbs-linux-amd64 --version
+          sha256sum hbbs-linux-amd64 | tee hbbs-linux-amd64.sha256
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$TAG" hbbs-linux-amd64 hbbs-linux-amd64.sha256 \
+            --repo "$GITHUB_REPOSITORY" --target "$SOURCE_SHA" --prerelease \
+            --title "hbbs 1.1.17-farreach.1" \
+            --notes "hbbs for Linux x86_64 (static, musl), built from commit $SOURCE_SHA: upstream rustdesk-server 873230e plus the FarReach plan check (src/plan_check.rs). The check stays off unless FARREACH_PLAN_CHECK=on. License: AGPL-3.0."
