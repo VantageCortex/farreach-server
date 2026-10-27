@@ -264,7 +264,7 @@ fn http_client() -> Result<&'static reqwest::Client, ()> {
         return Ok(client);
     }
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_millis(800))
+        .timeout(Duration::from_millis(3000))
         .build()
         .map_err(|_| ())?;
     Ok(HTTP.get_or_init(|| client))
