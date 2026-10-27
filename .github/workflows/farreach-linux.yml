@@ -11,8 +11,8 @@ jobs:
   hbbs:
     runs-on: ubuntu-24.04
     env:
-      SOURCE_SHA: 6cde1c024bf77c52a2e7bcf8e4c7df54734698a4
-      TAG: v1.1.17-farreach.1
+      SOURCE_SHA: 318d629abc01c35effbba5dc422ee570b39c0eb9
+      TAG: v1.1.17-farreach.2
     steps:
       - uses: actions/checkout@v4
         with:
@@ -53,5 +53,5 @@ jobs:
         run: |
           gh release create "$TAG" hbbs-linux-amd64 hbbs-linux-amd64.sha256 \
             --repo "$GITHUB_REPOSITORY" --target "$SOURCE_SHA" --prerelease \
-            --title "hbbs 1.1.17-farreach.1" \
+            --title "hbbs 1.1.17-farreach.2" \
             --notes "hbbs for Ubuntu 24.04 x86_64 (glibc, OpenSSL 3), built from commit $SOURCE_SHA: upstream rustdesk-server 873230e plus the FarReach plan check (src/plan_check.rs). The check stays off unless FARREACH_PLAN_CHECK=on. License: AGPL-3.0."
