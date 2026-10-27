@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   hbbs:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     env:
       SOURCE_SHA: 6cde1c024bf77c52a2e7bcf8e4c7df54734698a4
       TAG: v1.1.17-farreach.1
@@ -20,43 +20,30 @@ jobs:
           submodules: recursive
 
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-unknown-linux-musl
 
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cross
-
-      - name: Build with cross
-        id: cross
+      - name: Build
+        id: build
         continue-on-error: true
         run: |
           set -o pipefail
-          rustc -V; cross -V
-          cross build --release --locked --target x86_64-unknown-linux-musl --bin hbbs 2>&1 | tee cross.log
-
-      - name: Build with musl-tools
-        id: plain
-        if: steps.cross.outcome == 'failure'
-        continue-on-error: true
-        run: |
-          set -o pipefail
-          sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools
-          cargo build --release --locked --target x86_64-unknown-linux-musl --bin hbbs 2>&1 | tee plain.log
+          sudo apt-get update -qq && sudo apt-get install -y -qq libssl-dev pkg-config
+          rustc -V
+          cargo build --release --locked --bin hbbs 2>&1 | tee build.log
 
       - name: Keep the build log
-        if: steps.cross.outcome == 'failure' && steps.plain.outcome != 'success'
+        if: steps.build.outcome == 'failure'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          for f in cross.log plain.log; do [ -f "$f" ] && tail -n 200 "$f" > "tail-$f"; done
-          gh release create "build-log-$GITHUB_RUN_ID" tail-*.log --repo "$GITHUB_REPOSITORY" --draft --title "build log $GITHUB_RUN_ID" --notes "build failed"
+          tail -n 200 build.log > tail-build.log
+          gh release create "build-log-$GITHUB_RUN_ID" tail-build.log --repo "$GITHUB_REPOSITORY" --draft --title "build log $GITHUB_RUN_ID" --notes "build failed"
           exit 1
 
       - name: Check
         run: |
-          cp target/x86_64-unknown-linux-musl/release/hbbs hbbs-linux-amd64
+          cp target/release/hbbs hbbs-linux-amd64
           file hbbs-linux-amd64
+          ldd hbbs-linux-amd64
           ./hbbs-linux-amd64 --version
           sha256sum hbbs-linux-amd64 | tee hbbs-linux-amd64.sha256
 
@@ -67,4 +54,4 @@ jobs:
           gh release create "$TAG" hbbs-linux-amd64 hbbs-linux-amd64.sha256 \
             --repo "$GITHUB_REPOSITORY" --target "$SOURCE_SHA" --prerelease \
             --title "hbbs 1.1.17-farreach.1" \
-            --notes "hbbs for Linux x86_64 (static, musl), built from commit $SOURCE_SHA: upstream rustdesk-server 873230e plus the FarReach plan check (src/plan_check.rs). The check stays off unless FARREACH_PLAN_CHECK=on. License: AGPL-3.0."
+            --notes "hbbs for Ubuntu 24.04 x86_64 (glibc, OpenSSL 3), built from commit $SOURCE_SHA: upstream rustdesk-server 873230e plus the FarReach plan check (src/plan_check.rs). The check stays off unless FARREACH_PLAN_CHECK=on. License: AGPL-3.0."
